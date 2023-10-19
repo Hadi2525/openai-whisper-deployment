@@ -1,12 +1,16 @@
 import os
 import json
 import boto3
-import whisper
 from flask import Flask, request, jsonify
+from transformers import pipeline
+import torch
 import threading
 from botocore.exceptions import ClientError
 import logging
 import traceback
+
+# GPU / CPU
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Logging configuration
 logging.basicConfig(
@@ -15,8 +19,15 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+# Call Whisper Model V2 from Pipeline of Hugging Face
+pipe = pipeline("automatic-speech-recognition",
+                "openai/whisper-large-v2",
+                torch_dtype=torch.float16,
+                device=device)
+
 app = Flask(__name__)
-model = whisper.load_model('large')
+model_original = pipe
+model_optimized = pipe.model.to_bettertransformer()
 s3_client = boto3.client("s3")
 dynamodb_resource = boto3.resource('dynamodb')
 
@@ -79,19 +90,29 @@ def add_or_update_item(job_id, ddbtable):
     except ClientError as e:
         logging.error(f'Error in updating DynamoDB: {str(e)}\n{traceback.format_exc()}')
 
+def call_model(model, audio_file):
+    result = model(audio_file,
+                   chunk_length_s = 60,
+                   batch_size = 24,
+                   return_timestamps=True)
+    return result
+
 def transcribe(s3_bucket, s3_key, job_id, language, ddbtable):
     with model_lock:
         try:
+            # audio file name
+            audio_file = 'temp_audio.mp3'
             # Download the audio file from S3
-            s3_client.download_file(s3_bucket, s3_key, 'temp_audio.mp3')
+            s3_client.download_file(s3_bucket, s3_key, audio_file)
 
             # Transcribe the audio file
-            result = model.transcribe('temp_audio.mp3', language=language)
+            result_original_model = call_model(model_original, audio_file)
+            result_optimized_model = call_model(model_optimized, audio_file)
             os.remove('temp_audio.mp3')
 
             # Convert result to json string with proper encoding
-            result_json = json.dumps(result, ensure_ascii=False).encode('utf-8')
-            result_txt = json.dumps(result['text'], ensure_ascii=False).encode('utf-8')
+            result_json = json.dumps(result_original_model, ensure_ascii=False).encode('utf-8')
+            result_txt = json.dumps(result_original_model['text'], ensure_ascii=False).encode('utf-8')
 
             # Save transcription to S3
             output_jsonkey = s3_key.rsplit('/', 1)[0] + f'/{job_id}.json'
