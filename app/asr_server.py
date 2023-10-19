@@ -111,8 +111,8 @@ def transcribe(s3_bucket, s3_key, job_id, language, ddbtable):
             os.remove('temp_audio.mp3')
 
             # Convert result to json string with proper encoding
-            result_json = json.dumps(result_original_model, ensure_ascii=False).encode('utf-8')
-            result_txt = json.dumps(result_original_model['text'], ensure_ascii=False).encode('utf-8')
+            result_json = json.dumps(result_optimized_model, ensure_ascii=False).encode('utf-8')
+            result_txt = json.dumps(result_optimized_model['text'], ensure_ascii=False).encode('utf-8')
 
             # Save transcription to S3
             output_jsonkey = s3_key.rsplit('/', 1)[0] + f'/{job_id}.json'
